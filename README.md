@@ -379,14 +379,14 @@ worker-1 | SUCCESS => {
 
  Подготовим [roles/kubernetes_prepare/tasks/main.yml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/roles/kubernetes_prepare/tasks/main.yml)
 
-> Здесь мы:
-> 1. Обновляем индекс пакетов APT.
-> 2. Устанавливаем системные зависимости.
-> 3. Отключаем swap, если он включён.
-> 4. Убираем автоматическое подключение swap через /etc/fstab.
-> 5. Настраиваем загрузку модулей ядра.
-> 6. Загружаем необходимые модули.
-> 7. Настраиваем параметры сетевого стека Linux.
+ Здесь мы:
+ 1. Обновляем индекс пакетов APT.
+ 2. Устанавливаем системные зависимости.
+ 3. Отключаем swap, если он включён.
+ 4. Убираем автоматическое подключение swap через /etc/fstab.
+ 5. Настраиваем загрузку модулей ядра.
+ 6. Загружаем необходимые модули.
+ 7. Настраиваем параметры сетевого стека Linux.
 
 #### Создаём Handler
 
@@ -400,10 +400,195 @@ worker-1 | SUCCESS => {
 
 > Параметр become: true позволяет выполнять системные команды с привилегиями root через sudo.
 
+Проверим синтаксис:
+```bash
+ansible-playbook -i inventory/hosts.ini playbook.yml --syntax-check
 
+playbook: playbook.yml
+```
+Запускаем плейбук:
+```bash
+ansible-playbook -i inventory/hosts.ini playbook.yml
+```
+![ansible recap](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image8.jpg)
+Проведем проверку параметров
+```bash
+ansible -i inventory/hosts.ini kubernetes -m shell -a \
+'lsmod | grep -E "overlay|br_netfilter"; sysctl net.ipv4.ip_forward; swapon --show'
+```
+![parameters_show](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image9.jpg)
 
+ По результатам видно, что:
+ - Все три узла доступны по SSH.
+ - Пакеты установлены без ошибок.
+ - Swap уже был отключён до запуска Ansible, поэтому задача Disable swap immediately корректно пропустилась.
+ - Модули overlay и br_netfilter загружены на всех узлах.
+ - net.ipv4.ip_forward = 1 установлен на всех узлах.
+ - swapon --show не вывел активных разделов подкачки.
+ - Ошибок выполнения нет: failed=0, unreachable=0.
 
+#### Проверка сети перед установкой Kubernetes
+Перед установкой containerd и компонентов Kubernetes проверим связь между узлами по внутренним IP-адресам. Это важно, поскольку Kubernetes будет обмениваться служебным трафиком между master и worker-узлами через внутреннюю сеть Yandex Cloud.
 
+Проверяем сетевую связность
+```bash
+ansible -i inventory/hosts.ini kubernetes -m shell -a \
+'for ip in 10.10.1.10 10.10.2.10 10.10.3.10; do
+  echo "Checking $ip"
+  ping -c 3 -W 2 "$ip"
+done'
+```
+Проверимм синхронихацию времени
+```bash
+ansible -i inventory/hosts.ini kubernetes -m shell -a \
+'timedatectl status'
+```
+После того, как проверки пройдены, приступаем к настройке установке Kubernetes.<br>
 
+Для установки будем использовать:
+- containerd как контейнерную среду выполнения;
+- kubeadm для создания кластера;
+- kubelet для управления Pod на каждом узле;
+- kubectl для управления кластером.
+  
+> Для containerd настроим драйвер cgroup systemd, рекомендованный документацией Kubernetes для систем с cgroup v2.
+> Устанавливать всё будем через отдельную Ansible-роль, чтобы впоследствии можно было повторно развернуть инфраструктуру одной командой.
 
+#### Установка containerd и Kubernetes
 
+##### Архитектура установки
+На всех трёх серверах установим:
+Компонент	|Назначение
+---|---
+containerd	|Запуск контейнеров
+kubelet	|Управление Pod на узле
+kubeadm	|Инициализация и подключение узлов
+kubectl	|Управление кластером
+
+##### Добавляем переменные
+
+Добавим в **group_vars/kubernetes.yml** переменные:
+
+```yml
+# Kubernetes version
+kubernetes_minor_version: "1.37"
+
+# Container runtime
+containerd_package: containerd.io
+containerd_config_path: /etc/containerd/config.toml
+```
+> Переменная kubernetes_minor_version позволит в дальнейшем централизованно менять ветку Kubernetes.
+
+##### Создаём новую Ansible-роль
+
+[roles/kubernetes_install/tasks/main.yml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/roles/kubernetes_install/tasks/main.yml)
+
+##### Создаём Handler
+
+[roles/kubernetes_install/handlers/main.yml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/roles/kubernetes_install/handlers/main.yml)
+
+##### Подключаем роль к Playbook, добавляя
+
+```yml
+ roles:
+    - kubernetes_install
+```
+##### Проверяем конфигурацию
+```bash
+ansible-playbook -i inventory/hosts.ini playbook.yml --syntax-check
+ansible-playbook -i inventory/hosts.ini playbook.yml --list-hosts
+```
+![check playbook](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image10.jpg)
+
+#### Запускаем установку
+```bash
+ansible-playbook -i inventory/hosts.ini playbook.yml
+```
+Проверим:
+```bash
+ansible -i inventory/hosts.ini kubernetes -m shell -a \
+'containerd --version; kubelet --version; kubeadm version -o short; kubectl version --client'
+```
+![1check](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image11.jpg)
+```bash
+ansible -i inventory/hosts.ini kubernetes -m shell -a \
+'systemctl is-active containerd; systemctl is-enabled containerd; systemctl is-enabled kubelet'
+```
+![2check](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image12.jpg)
+```bash
+ansible -i inventory/hosts.ini kubernetes -m shell -a \
+'grep -n "SystemdCgroup" /etc/containerd/config.toml'
+```
+![3check](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image13.jpg)
+```bash
+ansible -i inventory/hosts.ini kubernetes -b -m shell -a \
+'ctr plugins ls | grep cri'
+```
+![4check](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image14.jpg)
+
+##### Cоздание Kubernetes control plane
+
+Для Pod Network будем использовать Calico с сетью 192.168.0.0/16. Она не пересекается с нашими подсетями Yandex Cloud 10.10.1.0/24, 10.10.2.0/24 и 10.10.3.0/24.
+
+##### Подготовка конфигурации kubeadm
+Будем использовать официальный формат конфигурации kubeadm.k8s.io/v1beta4. Он позволяет явно задать адрес API Server, версию Kubernetes, Pod CIDR и CRI socket. 
+
+Создаём шаблон конфигурации
+
+[roles/kubernetes_control_plane/templates/kubeadm-init.yaml.j2](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/roles/kubernetes_control_plane/templates/kubeadm-init.yaml.j2)
+
+В шаблоне:
+- advertiseAddress определяет внутренний адрес API Server.
+- bindPort задаёт порт Kubernetes API.
+- criSocket явно указывает containerd.
+- kubernetesVersion фиксирует версию компонентов control plane.
+- podSubnet задаёт диапазон IP-адресов для Pod.
+- serviceSubnet задаёт диапазон IP-адресов Kubernetes Services.
+
+##### Создаём задачи Ansible
+
+[roles/kubernetes_control_plane/tasks/main.yml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/roles/kubernetes_control_plane/tasks/main.yml)
+
+Подключаем роль в Playbook
+```yml
+- name: Configure Kubernetes control plane
+  hosts: masters
+  become: true
+  gather_facts: false
+
+  roles:
+    - kubernetes_control_plane 
+```
+##### Загрузка образов Kubernetes
+
+Перед инициализацией кластера загрузим необходимые контейнерные образы. Это позволит заранее проверить доступность registry и не прерывать инициализацию из-за отсутствующих образов.
+
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'sudo kubeadm config images pull --config /etc/kubernetes/kubeadm-init.yaml'
+```
+
+Проверка:
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'sudo ctr -n k8s.io images ls'
+```
+![pullcheck](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image15.jpg)
+
+Образы на месте, перейдём к инициализации control plane:
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'sudo kubeadm init --config /etc/kubernetes/kubeadm-init.yaml'
+```
+
+##### Настраиваем kubectl
+Сейчас файл /etc/kubernetes/admin.conf содержит параметры подключения и сертификаты администратора Kubernetes.
+
+Настроим доступ для пользователя ubuntu, чтобы не приходилось каждый раз использовать sudo kubectl.
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 '
+mkdir -p ~/.kube &&
+sudo cp /etc/kubernetes/admin.conf ~/.kube/config &&
+sudo chown ubuntu:ubuntu ~/.kube/config
+'
+```
