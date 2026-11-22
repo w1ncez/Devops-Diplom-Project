@@ -1,0 +1,27 @@
+---
+kubernetes_packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gpg
+  - software-properties-common
+  - conntrack
+  - socat
+  - ebtables
+  - ethtool
+
+kernel_modules:
+  - overlay
+  - br_netfilter
+
+sysctl_settings:
+  net.bridge.bridge-nf-call-iptables: "1"
+  net.bridge.bridge-nf-call-ip6tables: "1"
+  net.ipv4.ip_forward: "1"
+
+# Kubernetes version
+kubernetes_minor_version: "1.37"
+
+# Container runtime
+containerd_package: containerd.io
+containerd_config_path: /etc/containerd/config.toml
