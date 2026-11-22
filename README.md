@@ -11,7 +11,7 @@
 6. Настроить CD для автоматического развёртывания приложения.
 
 ---
-## 1. Архитектура решения и используемые технологии
+### Архитектура решения и используемые технологии
 
 | Компонент | Технология | Назначение |
 | :--- | :--- | :--- |
@@ -33,7 +33,7 @@
 - Удалять временные ресурсы после тестирования.
 - Контролировать расходы в консоли Yandex Cloud.<br>
 
-### Подготовка облачной инфраструктуры Yandex Cloud с помощью Terraform
+## 1. Подготовка облачной инфраструктуры Yandex Cloud с помощью Terraform
 
 Необходимо создать облачную инфраструктуру, которая обеспечит:
 1. Безопасное управление ресурсами Yandex Cloud через сервисный аккаунт.
@@ -173,16 +173,16 @@ terraform validate
 ##### Планируем адресацию
 VPC: devops-network
 
-Общая адресация: 10.10.0.0/16
-ru-central1-a
+Общая адресация: 10.10.0.0/16<br>
+*ru-central1-a*
 10.10.1.0/24
 Master Node
 
-ru-central1-d
+*ru-central1-d*
 10.10.2.0/24
 Worker Node 1
 
-ru-central1-e
+*ru-central1-e*
 10.10.3.0/24
 Worker Node 2
 
@@ -262,6 +262,147 @@ yc compute instance list
 ```
 ![yc compute list](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image6.jpg)
 ![vms in console](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image7.jpg)
+Итоговая иерархия структуры terraform:
+```text
+├── bootstrap
+│   ├── bootstrap.tfplan
+│   ├── main.tf
+│   ├── outputs.tf
+│   ├── providers.tf
+│   ├── terraform.tfstate
+│   ├── terraform.tfstate.backup
+│   ├── terraform.tfvars
+│   └── variables.tf
+└── infrastructure
+    ├── backend.tf
+    ├── compute.tf
+    ├── network.tf
+    ├── outputs.tf
+    ├── providers.tf
+    ├── security.tf
+    ├── terraform.tfvars
+    ├── terraform.tfstate
+    ├── tfplan
+    └── variables.tf
+```
+
+## 2. Запуск и конфигурация Kubernetes кластера
+
+Будем использовать связку containerd + kubeadm + kubelet + kubectl, а автоматизацию выполнять через Ansible. Это позволит не настраивать каждый сервер вручную и будет соответствовать архитектуре дипломного проекта.
+
+### Проверка исходного состояния серверов
+Перед установкой Kubernetes проверим операционную систему, ресурсы, swap и сетевые интерфейсы.
+Скрипт проверки предикатов:
+```bash
+for ip in 84.201.173.43 81.26.188.0 93.77.160.168; do
+    echo
+    echo "========== $ip =========="
+
+    ssh -i /home/w1nce/id_ed25519 \
+        -o ConnectTimeout=10 \
+        ubuntu@"$ip" '
+        echo "--- HOSTNAME ---"
+        hostname
+
+        echo "--- OS ---"
+        grep -E "PRETTY_NAME|VERSION_ID" /etc/os-release
+
+        echo "--- CPU ---"
+        nproc
+
+        echo "--- MEMORY ---"
+        free -h
+
+        echo "--- DISK ---"
+        df -h /
+
+        echo "--- SWAP ---"
+        sudo swapon --show
+
+        echo "--- NETWORK ---"
+        ip -br addr
+    '
+done
+```
+
+Результаты проверки:
+Параметр	|Master	|Worker 1	|Worker 2
+|----|----|----|----|
+Версия ОС	|Ubuntu 24.04.5	|Ubuntu 24.04.5	|Ubuntu 24.04.5
+CPU	|2	|2	|2
+RAM	|3.8 GiB	|3.8 GiB	|3.8 GiB
+Свободная RAM	|3.4 GiB	|3.4 GiB	|3.5 GiB
+Диск	|29 GB	|19 GB	|19 GB
+Swap	|Выключен	|Выключен	|Выключен
+Внутренний IP	|10.10.1.10	|10.10.2.10	|10.10.3.10
+
+#### Настраиваем Ansible
+
+Подготовим [inventory/hosts.ini](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/inventory/hosts.ini)
+
+Проведем проверки 
+```bash
+ansible-inventory -i inventory/hosts.ini --graph
+@all:
+  |--@ungrouped:
+  |--@kubernetes:
+  |  |--@masters:
+  |  |  |--master-1
+  |  |--@workers:
+  |  |  |--worker-1
+  |  |  |--worker-2
+```
+```bash
+ansible -i inventory/hosts.ini kubernetes -m ping
+master-1 | SUCCESS => {
+    "changed": false,
+    "ping": "pong"
+}
+worker-2 | SUCCESS => {
+    "changed": false,
+    "ping": "pong"
+}
+worker-1 | SUCCESS => {
+    "changed": false,
+    "ping": "pong"
+}
+```
+#### Создание Ansible-роли подготовки серверов
+
+Подготовим [group_vars/kubernetes.yml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/group_vars/kubernetes.yml)
+
+> kubernetes_packages содержит системные зависимости.
+> kernel_modules содержит модули ядра, необходимые для сетевой работы контейнеров.
+> sysctl_settings содержит параметры маршрутизации и обработки сетевого трафика.
+
+#### Создаём задачи Ansible
+
+ Подготовим [roles/kubernetes_prepare/tasks/main.yml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/roles/kubernetes_prepare/tasks/main.yml)
+
+> Здесь мы:
+> 1. Обновляем индекс пакетов APT.
+> 2. Устанавливаем системные зависимости.
+> 3. Отключаем swap, если он включён.
+> 4. Убираем автоматическое подключение swap через /etc/fstab.
+> 5. Настраиваем загрузку модулей ядра.
+> 6. Загружаем необходимые модули.
+> 7. Настраиваем параметры сетевого стека Linux.
+
+#### Создаём Handler
+
+Подготовим [roles/kubernetes_prepare/handlers/main.yml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/roles/kubernetes_prepare/handlers/main.yml)
+
+> Handler выполняется только тогда, когда изменился файл сетевых параметров.
+
+#### Создаём основной Playbook
+
+Подготовим [playbook.yml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/ansible/playbook.yml)
+
+> Параметр become: true позволяет выполнять системные команды с привилегиями root через sudo.
+
+
+
+
 
 
 
