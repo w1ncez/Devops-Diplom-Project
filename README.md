@@ -592,3 +592,303 @@ sudo cp /etc/kubernetes/admin.conf ~/.kube/config &&
 sudo chown ubuntu:ubuntu ~/.kube/config
 '
 ```
+
+### Устанавливаем Calico
+
+Calico обеспечивает:
+- Сетевую связность между Pod.
+- Маршрутизацию трафика между узлами.
+- Сетевые политики Kubernetes.
+- Интеграцию с Kubernetes CNI.
+
+> Мы указали Pod CIDR 192.168.0.0/16 при инициализации кластера, Calico должен использовать именно эту сеть.
+
+
+Загружаем манифест [Calico]()
+```bash
+mkdir -p kubernetes/manifests
+
+curl -L https://raw.githubusercontent.com/projectcalico/calico/v3.31.3/manifests/calico.yaml \
+-o kubernetes/manifests/calico.yaml
+```
+
+Устанавливаем Calico на master-1 через SSH
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'kubectl apply -f -' \
+< kubernetes/manifests/calico.yaml
+```
+Проверка:
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'kubectl get pods -n kube-system -o wide'
+
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'kubectl get nodes -o wide'
+```
+![calico deployed](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image16.jpg)
+
+Перед подключением Worker-узлов проверяем доступность API Server:
+```bash
+for ip in 81.26.188.0 93.77.160.168; do
+  echo "Проверка worker: $ip"
+  ssh -i /home/w1nce/id_ed25519 ubuntu@$ip \
+  'nc -zv -w 5 10.10.1.10 6443'
+done
+```
+
+Создаём новый токен подключения
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'sudo kubeadm token create --print-join-command'
+```
+После получения токена дополним playbook:
+```yaml
+- name: Generate Kubernetes join command
+  hosts: masters
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Generate kubeadm join command
+      ansible.builtin.command:
+        cmd: kubeadm token create --print-join-command
+      register: kubeadm_join_command
+      changed_when: true
+      no_log: true
+      run_once: true
+
+- name: Join worker nodes to Kubernetes cluster
+  hosts: workers
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Join worker to Kubernetes cluster
+      ansible.builtin.command:
+        cmd: "{{ hostvars[groups['masters'][0]].kubeadm_join_command.stdout }}"
+        creates: /etc/kubernetes/kubelet.conf
+      no_log: true
+```
+Здесь:
+1. Ansible подключается к master-1.
+2. Создаёт новый токен и формирует команду kubeadm join.
+3. Сохраняет команду во внутреннюю переменную Ansible.
+4. no_log: true скрывает секретные данные в выводе.
+5. Подключается к worker-1 и worker-2.
+6. Выполняет kubeadm join на каждом узле.
+
+Запускаем подключение
+```bash
+ansible-playbook -i inventory/hosts.ini playbook.yml
+```
+
+Проверяем кластер
+
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 'kubectl get nodes -o wide'
+```
+![kubecluster check](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image17.jpg)
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'kubectl get pods -A -o wide'
+```
+![kubecluster check2](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image18.jpg)
+
+На данном этапе успешно выполнено:
+1. Подготовлены три виртуальные машины с помощью Ansible.
+2. Установлены containerd и компоненты Kubernetes.
+3. Инициализирован Control Plane через kubeadm.
+4. Установлен сетевой плагин Calico.
+5. Оба Worker-узла присоединены к кластеру.
+
+Структура ansible каталога
+```text
+ansible/
+├── group_vars
+│   └── kubernetes.yml
+├── inventory
+│   └── hosts.ini
+├── playbook.yml
+└── roles
+    ├── kubernetes_control_plane
+    │   ├── tasks
+    │   │   └── main.yml
+    │   └── templates
+    │       └── kubeadm-init.yaml.j2
+    ├── kubernetes_install
+    │   ├── handlers
+    │   │   └── main.yml
+    │   └── tasks
+    │       └── main.yml
+    └── kubernetes_prepare
+        ├── handlers
+        │   └── main.yml
+        └── tasks
+            └── main.yml
+```
+
+
+## 3. Создание тестового приложения
+
+Создадим GitHub репозиторий приложения:
+[nginx-static-app](https://github.com/w1ncez/nginx-static-app)
+
+Наше статичное nginx-приложение будет содержать:
+- index.html: главная страница сайта.
+- default.conf: конфигурация Nginx.
+- Dockerfile: инструкция для сборки Docker-образа.
+- .dockerignore: исключения для контекста сборки.
+- README.md: описание приложения.
+
+```
+nginx-static-app/
+├── html/
+│   └── index.html
+├── conf/
+│   └── default.conf
+├── Dockerfile
+├── .dockerignore
+└── README.md
+```
+
+Подготовим главную страницу сайта **html/index.html**:
+```html
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevOps Diplom Project</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f3f4f6;
+            color: #1f2937;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 100px auto;
+            padding: 40px;
+            background: white;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+
+        h1 {
+            color: #2563eb;
+        }
+
+        .status {
+            color: #16a34a;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DevOps Diplom Project</h1>
+        <p>Статическое веб-приложение на базе Nginx.</p>
+        <p>Приложение развёрнуто в Kubernetes.</p>
+        <p class="status">Application status: OK</p>
+        <hr>
+        <p>Infrastructure: Yandex Cloud</p>
+        <p>Container runtime: containerd</p>
+        <p>Orchestration: Kubernetes</p>
+        <p>Automation: Terraform, Ansible, GitHub Actions</p>
+        <p>Monitoring: Grafana, Prometheus, Alertmanager, Nodeexporter</p>
+    </div>
+</body>
+</html>
+```
+Подготовим конфигурацию nginx **conf/default.conf**:
+```nginx
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location = /health {
+        access_log off;
+        default_type text/plain;
+        return 200 "OK\n";
+    }
+}
+```
+
+Подготовим **Dockerfile**:
+
+```dockerfile
+FROM nginx:stable-alpine
+
+LABEL maintainer="DevOps Diplom Project"
+
+COPY conf/default.conf /etc/nginx/conf.d/default.conf
+
+COPY html/ /usr/share/nginx/html/
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+находясь в репозитории, запустим сборку образа:
+
+```bash
+sudo docker build -t nginx-static-app:1.0 .
+```
+```bash
+Successfully tagged nginx-static-app:1.0
+```
+Проверим создание образа:
+```bash
+sudo docker images                                                                             
+IMAGE                                    ID             DISK USAGE   CONTENT SIZE   EXTRA   
+nginx-static-app:1.0                     f13c6f4cb7b7       92.7MB         26.1MB        
+```
+И запустим контейнер:
+```bash
+sudo docker run -d \
+  --name nginx-static-app \
+  -p 8080:80 \
+  nginx-static-app:1.0
+```
+Проверим его запуск:
+```bash
+sudo docker ps
+CONTAINER ID   IMAGE                  COMMAND                  CREATED         STATUS         PORTS                                     NAMES
+d23b2058bcca   nginx-static-app:1.0   "/docker-entrypoint.…"   4 seconds ago   Up 4 seconds   0.0.0.0:8080->80/tcp, [::]:8080->80/tcp   nginx-static-app
+```
+И проверим работу nginx:
+```bash
+curl -I http://localhost:8080
+HTTP/1.1 200 OK
+Server: nginx/1.30.7
+Date: Mon, 23 Nov 2026 18:35:42 GMT
+Content-Type: text/html
+Content-Length: 1386
+Last-Modified: Sun, 22 Nov 2026 09:55:04 GMT
+Connection: keep-alive
+ETag: "6b02bbf8-56a"
+Accept-Ranges: bytes
+```
+На данном этапе:
+1. Создан репозиторий для приложений
+2. Создана страница сайта
+3. Настроен nginx
+4. Подготовлен Dockerfile
+5. Приложение запущено и доступно
+
+### Настройка workflow в GitHub Actions
+
+
+
