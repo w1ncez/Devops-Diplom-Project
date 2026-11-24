@@ -882,13 +882,105 @@ ETag: "6b02bbf8-56a"
 Accept-Ranges: bytes
 ```
 На данном этапе:
-1. Создан репозиторий для приложений
-2. Создана страница сайта
-3. Настроен nginx
-4. Подготовлен Dockerfile
-5. Приложение запущено и доступно
+1. Создан репозиторий для приложений.
+2. Создана страница сайта.
+3. Настроен nginx.
+4. Подготовлен Dockerfile.
+5. Приложение запущено и доступно.
 
 ### Настройка workflow в GitHub Actions
 
+Создадим в репозитории .github/workflows/docker-build.yml со следующим содержимым:
+```yaml
+name: Build and publish Docker image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: w1ncez/nginx-static-app
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image for testing
+        run: docker build -t nginx-static-app:test .
+
+      - name: Validate Nginx configuration
+        run: docker run --rm nginx-static-app:test nginx -t
+
+      - name: Test application health endpoint
+        run: |
+          docker run -d --name nginx-test -p 8080:80 nginx-static-app:test
+          trap 'docker rm -f nginx-test >/dev/null 2>&1 || true' EXIT
+          for i in {1..10}; do
+            if curl --fail http://localhost:8080/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/w1ncez/nginx-static-app
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+```
+
+В нем описаны следующие действия:
+1. Checkout repository получает исходный код из GitHub.
+2. Build Docker image for testing собирает образ.
+3. Validate Nginx configuration проверяет конфигурацию Nginx командой nginx -t.
+4. Test application health endpoint запускает контейнер и проверяет /health.
+5. Log in to GitHub Container Registry выполняет авторизацию через встроенный GITHUB_TOKEN.
+6. Build and push Docker image публикует образ в GHCR.
+
+После коммита и пуша, проверим вкладку Actions и успешность созданного Workflow
+![workflow sucess](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image19.jpg)
+И успешно созданный образ в GitHub Container Registry
+![ghcp success](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image20.jpg)
+
+На данном этапе реализована следующая цепочка:
+1. Мы отправляем изменения в GitHub.
+2. GitHub Actions автоматически запускает workflow.
+3. Проверяется конфигурация Nginx.
+4. Собирается Docker-образ.
+5. Проверяется HTTP-эндпоинт /health.
+6. Образ публикуется в GitHub Container Registry (GHCR).
 
 
