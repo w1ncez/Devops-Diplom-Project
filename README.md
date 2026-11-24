@@ -5,10 +5,10 @@
 
 - Подготовить облачную инфраструктуру на базе облачного провайдера Яндекс.Облако.
 - Запустить и сконфигурировать Kubernetes кластер.
--  Установить и настроить систему мониторинга.
+- Установить и настроить систему мониторинга.
 - Настроить и автоматизировать сборку тестового приложения с использованием Docker-контейнеров.
--  Настроить CI для автоматической сборки и тестирования.
--  Настроить CD для автоматического развёртывания приложения.
+- Настроить CI для автоматической сборки и тестирования.
+- Настроить CD для автоматического развёртывания приложения.
 
 ---
 ### Архитектура решения и используемые технологии
@@ -190,11 +190,11 @@ Worker Node 2
 
 Теперь настроим [network.tf](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/terraform/infrastructure/network.tf)
 
-> В нём опишем:
-> - одну виртуальную сеть VPC;
-> - три подсети в разных зонах доступности;
-> - адресное пространство 10.10.0.0/16;
-> - отдельные диапазоны IP для Master и Worker узлов.
+В нём опишем:
+- одну виртуальную сеть VPC;
+- три подсети в разных зонах доступности;
+- адресное пространство 10.10.0.0/16;
+- отдельные диапазоны IP для Master и Worker узлов.
 
 Проверим план, затем применим его:
 ```bash
@@ -841,7 +841,7 @@ EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 ```
 
-находясь в репозитории, запустим сборку образа:
+Находясь в репозитории, запустим сборку образа:
 
 ```bash
 sudo docker build -t nginx-static-app:1.0 .
@@ -982,5 +982,73 @@ jobs:
 4. Собирается Docker-образ.
 5. Проверяется HTTP-эндпоинт /health.
 6. Образ публикуется в GitHub Container Registry (GHCR).
+
+## 4. Развёртывание приложения в Kubernetes
+
+Далее необходимо запустить наше Nginx-приложение в ранее созданном трёхузловом Kubernetes-кластере, используя образ из GHCR.
+
+Предлагаемая конфигурация:
+Параметр|	Значение
+---|---
+Namespace	|diplom
+Deployment	|nginx-static-app
+Количество реплик	|3
+Container port	|80
+Service	|NodePort
+Health checks	|Readiness и Liveness probes
+Image	|ghcr.io/w1ncez/nginx-static-app:latest
+
+Начнем с создания манифестов [namespace.yaml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/kubernetes/manifests/app/namespace.yaml), [deployment.yaml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/kubernetes/manifests/app/deployment.yaml) и [service.yaml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/kubernetes/manifests/app/service.yaml)
+
+В них опишем:
+- пространство имён;
+- запуск приложения;
+- сетевой доступ к Pod.
+
+Далее приступим к прмиенению:
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'kubectl apply -f -' \
+< kubernetes/manifests/app/namespace.yaml
+```
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'kubectl apply -f -' \
+< kubernetes/manifests/app/deployment.yaml
+```
+```bash
+ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
+'kubectl apply -f -' \
+< kubernetes/manifests/app/service.yaml
+```
+После чего, через некоторое время произведем проверки, что все корректно создалось:
+![checks](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image21.jpg)
+И проверку работы нашего приложения:
+![checks2](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image22.jpg)
+
+На данном этапе реализовано:
+1. Созданы необходимые манифесты;
+2. Приложение развернуто в кластере Kubernetes.
+3. Размещено приложение только на Worker-узлах.
+4. Настроена Балансировка Pod между узлами.
+5. Настроено получение образа из публичного GHCR.
+6. Настроено ограничение CPU и памяти.
+7. Произведена проверка корректности работы приложения.
+
+## 5. Настройка мониторинга
+
+Для реализации задачи мониторинга мы будем использовать стек **kube-prometheus-stack**, который позволит развернуть основные компоненты мониторинга в нашем кластере Kubernetes.
+
+### Архитектура мониторинга
+Компонент | Роль в системе | Основные функции 
+ --- | --- | --- 
+ **Node Exporter** | Источник метрик | Сбор метрик операционной системы виртуальных машин. 
+ **kube-state-metrics** | Источник метрик | Трансляция состояния объектов Kubernetes в формат метрик Prometheus. 
+ **Kubernetes / Kubelet** | Источник метрик | Предоставление низкоуровневых метрик работы узлов и контейнеров непосредственно из API-сервера и Kubelet. 
+ **Prometheus** | Ядро системы | Периодический сбор метрик со всех источников, их индексация и хранение в временной базе данных. 
+ **Grafana** | Визуализация | Запрос данных из Prometheus через PromQL и отображение их на интерактивных дашбордах с настройкой пороговых значений. 
+ **Alertmanager** | Оповещения | Прием алармов от Prometheus, их группировка, дедупликация и маршрутизация в каналы связи (Telegram, Email, Slack). 
+
+> Все это мы будем устанавливать через Helm согласно официальной [инструкции](https://helm.sh/docs/v3/intro/install/)
 
 
