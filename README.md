@@ -10,6 +10,13 @@
 - Настроить CI для автоматической сборки и тестирования.
 - Настроить CD для автоматического развёртывания приложения.
 
+## Этапы выполнения:
+- [1. Подготовка облачной инфраструктуры Yandex Cloud с помощью Terraform](#1-подготовка-облачной-инфраструктуры-yandex-cloud-с-помощью-terraform)
+- [2. Запуск и конфигурация Kubernetes кластера](#2-запуск-и-конфигурация-kubernetes-кластера)
+- [3. Создание тестового приложения и настройка CI/CD](#3-создание-тестового-приложения)
+- [4. Развёртывание приложения в Kubernetes](#4-развёртывание-приложения-в-kubernetes)
+- [5. Настройка мониторинга](#5-настройка-мониторинга)
+
 ---
 ### Архитектура решения и используемые технологии
 
@@ -1049,6 +1056,377 @@ ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
  **Grafana** | Визуализация | Запрос данных из Prometheus через PromQL и отображение их на интерактивных дашбордах с настройкой пороговых значений. 
  **Alertmanager** | Оповещения | Прием алармов от Prometheus, их группировка, дедупликация и маршрутизация в каналы связи (Telegram, Email, Slack). 
 
-> Все это мы будем устанавливать через Helm согласно официальной [инструкции](https://helm.sh/docs/v3/intro/install/)
+> Все компоненты мониторинга мы будем устанавливать через Helm, который установим согласно официальной [инструкции](https://helm.sh/docs/v3/intro/install/)
 
+После установки Helm на master-1 установим **Helm chart Metrics Server**, перед этим проверим доступные версии и заданные параметры:
+```bash
+ubuntu@master-1:~$ helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+helm repo update
+"metrics-server" has been added to your repositories
+Hang tight while we grab the latest from your chart repositories...
+...Successfully got an update from the "metrics-server" chart repository
+Update Complete. ⎈Happy Helming!⎈
+ubuntu@master-1:~$ helm search repo metrics-server/metrics-server --versions | head -10
+NAME                            CHART VERSION   APP VERSION     DESCRIPTION                                       
+metrics-server/metrics-server   3.14.0          0.9.0           Metrics Server is a scalable, efficient source ...
+metrics-server/metrics-server   3.13.1          0.8.1           Metrics Server is a scalable, efficient source ...
+metrics-server/metrics-server   3.13.0          0.8.0           Metrics Server is a scalable, efficient source ...
+metrics-server/metrics-server   3.12.2          0.7.2           Metrics Server is a scalable, efficient source ...
+metrics-server/metrics-server   3.12.1          0.7.1           Metrics Server is a scalable, efficient source ...
+metrics-server/metrics-server   3.12.0          0.7.0           Metrics Server is a scalable, efficient source ...
+metrics-server/metrics-server   3.11.0          0.6.4           Metrics Server is a scalable, efficient source ...
+metrics-server/metrics-server   3.10.0          0.6.3           Metrics Server is a scalable, efficient source ...
+metrics-server/metrics-server   3.9.0           0.6.3           Metrics Server is a scalable, efficient source ...
+ubuntu@master-1:~$ helm show values metrics-server/metrics-server --version 3.14.0 | grep -n -A 12 -B 3 '^args:'
+101-  - --kubelet-use-node-status-port
+102-  - --metric-resolution=15s
+103-
+104:args: []
+105-
+106-livenessProbe:
+107-  httpGet:
+108-    path: /livez
+109-    port: https
+110-    scheme: HTTPS
+111-  initialDelaySeconds: 0
+112-  periodSeconds: 10
+113-  failureThreshold: 3
+114-
+115-readinessProbe:
+116-  httpGet:
+```
+
+Выберем версию Helm chart 3.14.0 и Metrics Server 0.9.0 и приступим к установке.
+
+Создадим файл **metrics-server-values.yaml**:
+```yaml
+args:
+  - --kubelet-insecure-tls
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 200Mi
+```
+
+> Нам особенно важен параметр **--kubelet-insecure-tls**.
+> В нашем кластере kubelet может использовать сертификаты, которые Metrics Server не сможет проверить через доверенный CA.
+> Официальная документация предусматривает этот параметр для таких случаев, но отмечает, что он отключает проверку сертификата и предназначен для тестовых сценариев.
+
+
+Устанавливаем Metrics Server:
+```bash
+helm upgrade --install metrics-server \
+  metrics-server/metrics-server \
+  --version 3.14.0 \
+  --namespace kube-system \
+  -f metrics-server-values.yaml
+```
+
+Далее производим проверку получения метрик:
+```bash
+ubuntu@master-1:~$ kubectl top nodes
+NAME       CPU(cores)   CPU(%)   MEMORY(bytes)   MEMORY(%)   
+master-1   139m         6%       1729Mi          45%         
+worker-1   49m          2%       899Mi           23%         
+worker-2   42m          2%       864Mi           22%         
+ubuntu@master-1:~$ kubectl top pods -A
+NAMESPACE     NAME                                       CPU(cores)   MEMORY(bytes)   
+diplom        nginx-static-app-56bcb9fdb9-hjtnm          1m           3Mi             
+diplom        nginx-static-app-56bcb9fdb9-jsd8c          1m           3Mi             
+diplom        nginx-static-app-56bcb9fdb9-rkjf9          1m           3Mi             
+kube-system   calico-kube-controllers-7dbfb9c746-drjkp   8m           81Mi            
+kube-system   calico-node-hs2gr                          22m          183Mi           
+kube-system   calico-node-lpl2r                          20m          181Mi           
+kube-system   calico-node-n5jtk                          19m          183Mi           
+kube-system   coredns-559f6c778d-8mplk                   2m           43Mi            
+kube-system   coredns-559f6c778d-cml78                   1m           42Mi            
+kube-system   etcd-master-1                              17m          84Mi            
+kube-system   kube-apiserver-master-1                    29m          385Mi           
+kube-system   kube-controller-manager-master-1           10m          122Mi           
+kube-system   kube-proxy-7rvgp                           1m           57Mi            
+kube-system   kube-proxy-gkmlx                           1m           58Mi            
+kube-system   kube-proxy-zv687                           1m           58Mi            
+kube-system   kube-scheduler-master-1                    7m           68Mi            
+kube-system   metrics-server-995d47bd7-fsrss             2m           16Mi
+```
+
+#### Установка Prometheus и Grafana
+Мы будем использовать Helm chart kube-prometheus-stack от сообщества Prometheus.
+
+Он объединяет:
+- Prometheus: сбор и хранение метрик.
+- Grafana: визуализация и дашборды.
+- Alertmanager: обработка оповещений.
+- Node Exporter: метрики операционных систем всех трёх VM.
+- kube-state-metrics: состояние объектов Kubernetes.
+- Prometheus Operator: управление компонентами мониторинга.<br>
+Это позволит не устанавливать каждый компонент отдельно.
+
+С учетом потребляемых ресурсов предлагаемая конфигурация следующая:
+- одна реплика Prometheus;
+- одна реплика Grafana;
+- одна реплика Alertmanager;
+- минимально необходимые requests и limits;
+- хранение метрик в течение 3 дней.
+
+Для установки добавим репозиторий Prometheus:
+```bash
+ubuntu@master-1:~$ helm repo add prometheus-community \
+  https://prometheus-community.github.io/helm-charts
+helm repo update
+"prometheus-community" has been added to your repositories
+Hang tight while we grab the latest from your chart repositories...
+...Successfully got an update from the "metrics-server" chart repository
+...Successfully got an update from the "prometheus-community" chart repository
+Update Complete. ⎈Happy Helming!⎈
+```
+Касаемо хранения я предпочел остановиться на локальном хранилище VM, т.к. оно не требует покупки дополнительных дисков и данные привязаны к конкретной VM.
+Также будет использоваться local-path-provisioner, он будет динамически создавать каталоги на дисках worker-нод и предоставлять их Pod через PVC.
+Это позволит сохранять метрики после перезапуска Pod, но не обеспечит сохранность данных при потере самой worker-ноды.
+
+Устанавливаем Local Path Provisioner из репозитория rancher:
+```bash
+kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.37/deploy/local-path-storage.yaml
+```
+Проверим состояние:
+```bash
+ubuntu@master-1:~$ kubectl get pods -n local-path-storage -o wide
+NAME                                      READY   STATUS    RESTARTS   AGE   IP                NODE       NOMINATED NODE   READINESS GATES
+local-path-provisioner-7c7ff4f446-mwn57   1/1     Running   0          97s   192.168.133.198   worker-2   <none>           <none>
+ubuntu@master-1:~$ kubectl get storageclass
+NAME         PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+local-path   rancher.io/local-path   Delete          WaitForFirstConsumer   false                  104s
+ubuntu@master-1:~$ kubectl describe storageclass local-path
+Name:            local-path
+IsDefaultClass:  No
+Annotations:     kubectl.kubernetes.io/last-applied-configuration={"apiVersion":"storage.k8s.io/v1","kind":"StorageClass","metadata":{"annotations":{},"name":"local-path"},"provisioner":"rancher.io/local-path","reclaimPolicy":"Delete","volumeBindingMode":"WaitForFirstConsumer"}
+
+Provisioner:           rancher.io/local-path
+Parameters:            <none>
+AllowVolumeExpansion:  <unset>
+MountOptions:          <none>
+ReclaimPolicy:         Delete
+VolumeBindingMode:     WaitForFirstConsumer
+Events:                <none>
+```
+
+Следующим шагом создаем неймспейс для мониторинга:
+```bash
+kubectl create namespace monitoring
+```
+Создадим манифест **monitoring-values.yaml** в каталоге ~/monitoring/:
+```yaml
+# Prometheus
+prometheus:
+  prometheusSpec:
+    replicas: 1
+    retention: 5d
+    retentionSize: "3GB"
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 5Gi
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+# Grafana
+grafana:
+  enabled: true
+  replicas: 1
+
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    accessModes:
+      - ReadWriteOnce
+    size: 2Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+# Alertmanager
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    replicas: 1
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+
+# Node Exporter
+prometheus-node-exporter:
+  enabled: true
+
+# kube-state-metrics
+kube-state-metrics:
+  enabled: true
+```
+Почему такие параметры:
+- Prometheus получает 5 GiB под метрики, срок хранения ограничен пятью днями.
+- Grafana получает 2 GiB для своих данных.
+- Alertmanager получает 1 GiB.
+- Ограничения CPU и RAM помогают избежать чрезмерного потребления ресурсов.
+- Используем одну реплику каждого основного компонента, чтобы не перегружать три виртуальные машины.
+
+Запускаем Helm lint:
+```bash
+ubuntu@master-1:~/monitoring$ helm pull prometheus-community/kube-prometheus-stack \
+  --version 93.4.0 \
+  --untar
+ubuntu@master-1:~/monitoring$ helm lint ./kube-prometheus-stack \
+  -f monitoring-values.yaml
+==> Linting ./kube-prometheus-stack
+
+1 chart(s) linted, 0 chart(s) failed
+```
+Устанавливаем kube-prometheus-stack:
+```bash
+helm upgrade --install monitoring ./kube-prometheus-stack \
+  --namespace monitoring \
+  -f monitoring-values.yaml \
+  --wait \
+  --timeout 10m
+```
+Через некоторое время проверим успешность установки:
+```bash
+ubuntu@master-1:~/monitoring$ helm list -n monitoring
+NAME            NAMESPACE       REVISION        UPDATED                                 STATUS          CHART                          APP VERSION
+monitoring      monitoring      1               2026-11-19 18:56:19.474791469 +0000 UTC deployed        kube-prometheus-stack-93.4.0   v0.95.2    
+ubuntu@master-1:~/monitoring$ kubectl get pods -n monitoring -o wide
+NAME                                                     READY   STATUS    RESTARTS       AGE     IP                NODE       NOMINATED NODE   READINESS GATES
+alertmanager-monitoring-kube-prometheus-alertmanager-0   2/2     Running   0              3m7s    192.168.133.204   worker-2   <none>           <none>
+monitoring-grafana-747d46fb65-d29hr                      3/3     Running   0              3m24s   192.168.226.76    worker-1   <none>           <none>
+monitoring-kube-prometheus-operator-6b77dd6c5b-wtdc5     1/1     Running   0              3m24s   192.168.133.200   worker-2   <none>           <none>
+monitoring-kube-state-metrics-7d94c4cbd8-hq9f2           1/1     Running   0              3m24s   192.168.226.74    worker-1   <none>           <none>
+monitoring-prometheus-node-exporter-jwll9                1/1     Running   0              3m24s   10.10.3.10        worker-2   <none>           <none>
+monitoring-prometheus-node-exporter-t2q6t                1/1     Running   0              3m24s   10.10.2.10        worker-1   <none>           <none>
+monitoring-prometheus-node-exporter-wb4lq                1/1     Running   0              3m24s   10.10.1.10        master-1   <none>           <none>
+prometheus-monitoring-kube-prometheus-prometheus-0       2/2     Running   0              3m6s    192.168.133.203   worker-2   <none>           <none>
+ubuntu@master-1:~/monitoring$ kubectl get pvc -n monitoring
+NAME                                                                                                             STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+alertmanager-monitoring-kube-prometheus-alertmanager-db-alertmanager-monitoring-kube-prometheus-alertmanager-0   Bound    pvc-5d162118-74c3-440a-bd78-31cdf76e6d4d   1Gi        RWO            local-path     <unset>                 3m11s
+monitoring-grafana                                                                                               Bound    pvc-4c386b5a-3571-403a-93b2-88b52c4f8a1f   2Gi        RWO            local-path     <unset>                 3m28s
+prometheus-monitoring-kube-prometheus-prometheus-db-prometheus-monitoring-kube-prometheus-prometheus-0           Bound    pvc-badbbef2-0074-4f6f-9cb9-3a4025355449   5Gi        RWO            local-path     <unset>                 3m10s
+ubuntu@master-1:~/monitoring$ kubectl get pv
+NAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                                                                                                                       STORAGECLASS   VOLUMEATTRIBUTESCLASS   REASON   AGE
+pvc-4c386b5a-3571-403a-93b2-88b52c4f8a1f   2Gi        RWO            Delete           Bound    monitoring/monitoring-grafana                                                                                               local-path     <unset>                          3m30s
+pvc-5d162118-74c3-440a-bd78-31cdf76e6d4d   1Gi        RWO            Delete           Bound    monitoring/alertmanager-monitoring-kube-prometheus-alertmanager-db-alertmanager-monitoring-kube-prometheus-alertmanager-0   local-path     <unset>                          3m9s
+pvc-badbbef2-0074-4f6f-9cb9-3a4025355449   5Gi        RWO            Delete           Bound    monitoring/prometheus-monitoring-kube-prometheus-prometheus-db-prometheus-monitoring-kube-prometheus-prometheus-0           local-path     <unset>                          3m9s
+```
+Для проверки запустим port-forwarding
+```bash
+kubectl port-forward -n monitoring svc/monitoring-grafana 3000:80
+Forwarding from 127.0.0.1:3000 -> 3000
+Forwarding from [::1]:3000 -> 3000
+Handling connection for 3000
+Handling connection for 3000
+Handling connection for 3000
+Handling connection for 3000
+Handling connection for 3000
+Handling connection for 3000
+Handling connection for 3000
+```
+И с другого ПК проверим интерфейс графаны и все источники и метрики, пробросив порт на localhost:
+```
+ssh -i "C:\Temp\id_ed25519" -L  3000:localhost:3000 ubuntu@84.201.173.43
+```
+![grafana1](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image23.jpg)
+![grafana2](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image24.jpg)
+![grafana3](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image25..jpg)
+
+В конце проверим все наши поды во всех неймспейсах и отображение странички нашего прилоожения:
+```
+ubuntu@master-1:~$ kubectl get pods --all-namespaces
+NAMESPACE            NAME                                                     READY   STATUS    RESTARTS      AGE
+diplom               nginx-static-app-56bcb9fdb9-hjtnm                        1/1     Running   3 (72m ago)   5d22h
+diplom               nginx-static-app-56bcb9fdb9-jsd8c                        1/1     Running   3 (72m ago)   5d22h
+diplom               nginx-static-app-56bcb9fdb9-rkjf9                        1/1     Running   3 (72m ago)   5d22h
+kube-system          calico-kube-controllers-7dbfb9c746-drjkp                 1/1     Running   4 (73m ago)   6d21h
+kube-system          calico-node-hs2gr                                        1/1     Running   4 (72m ago)   6d21h
+kube-system          calico-node-lpl2r                                        1/1     Running   4 (72m ago)   6d21h
+kube-system          calico-node-n5jtk                                        1/1     Running   4 (73m ago)   6d21h
+kube-system          coredns-559f6c778d-8mplk                                 1/1     Running   4 (73m ago)   6d22h
+kube-system          coredns-559f6c778d-cml78                                 1/1     Running   4 (73m ago)   6d22h
+kube-system          etcd-master-1                                            1/1     Running   4 (73m ago)   6d22h
+kube-system          kube-apiserver-master-1                                  1/1     Running   4 (73m ago)   6d22h
+kube-system          kube-controller-manager-master-1                         1/1     Running   4 (73m ago)   6d22h
+kube-system          kube-proxy-7rvgp                                         1/1     Running   4 (72m ago)   6d21h
+kube-system          kube-proxy-gkmlx                                         1/1     Running   4 (72m ago)   6d21h
+kube-system          kube-proxy-zv687                                         1/1     Running   4 (73m ago)   6d22h
+kube-system          kube-scheduler-master-1                                  1/1     Running   4 (73m ago)   6d22h
+kube-system          metrics-server-995d47bd7-fsrss                           1/1     Running   4 (71m ago)   5d21h
+local-path-storage   local-path-provisioner-7c7ff4f446-mwn57                  1/1     Running   3 (72m ago)   5d21h
+monitoring           alertmanager-monitoring-kube-prometheus-alertmanager-0   2/2     Running   4 (72m ago)   5d20h
+monitoring           monitoring-grafana-784ff9f49b-mhkwx                      3/3     Running   4 (72m ago)   5d20h
+monitoring           monitoring-kube-prometheus-operator-6b77dd6c5b-wtdc5     1/1     Running   4 (72m ago)   5d20h
+monitoring           monitoring-kube-state-metrics-7d94c4cbd8-hq9f2           1/1     Running   4 (71m ago)   5d20h
+monitoring           monitoring-prometheus-node-exporter-jwll9                1/1     Running   4 (72m ago)   5d20h
+monitoring           monitoring-prometheus-node-exporter-t2q6t                1/1     Running   4 (72m ago)   5d20h
+monitoring           monitoring-prometheus-node-exporter-wb4lq                1/1     Running   4 (73m ago)   5d20h
+monitoring           prometheus-monitoring-kube-prometheus-prometheus-0       2/2     Running   4 (72m ago)   5d20h
+```
+> Рестарты связаны с выключением ВМ в консоли на время простоя
+
+Страничка нашего приложения:
+![website](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image26..jpg)
+
+
+На данном этапе выполнены:
+- Установлен Helm для управления Kubernetes-приложениями.
+- Установлен Metrics Server для получения метрик CPU и памяти Kubernetes-узлов и Pod.
+- Установлен Local Path Provisioner для динамического создания PersistentVolume.
+- Установлен kube-prometheus-stack.
+- Настроены Alertmanager, Prometheus и Grafana.
+- Проверена корректность передачи метрик и визуализация.
+- Проверена работа кластера Kubernetes и нашего приложения.
+
+
+---
+
+
+
+В рамках дипломного проекта реализована инфраструктура для развертывания и эксплуатации веб-приложения на базе Yandex Cloud и Kubernetes с использованием инструментов автоматизации DevOps.
+
+Что реализовано:
+- Создана облачная инфраструктура в Yandex Cloud, включающая виртуальную сеть, подсети, группы безопасности и три виртуальные машины в разных зонах доступности.
+- Подготовлены серверы и автоматизирована установка Kubernetes-кластера с использованием kubeadm, containerd и Calico.
+- Создан Docker-образ статического веб-приложения на базе Nginx и опубликован в GitHub Container Registry (GHCR).
+- Настроен автоматический процесс сборки, проверки и публикации Docker-образа при изменении исходного кода приложения.
+- Развернуто веб-приложение с тремя репликами, настроены Service типа NodePort и проверки работоспособности приложения.
+- Установлен комплекс kube-prometheus-stack, включающий Prometheus, Grafana, Alertmanager, Node Exporter и kube-state-metrics. Настроено постоянное хранение данных мониторинга и ограничение потребления ресурсов.
+
+Результат:
+Создана работоспособная инфраструктура, позволяющая развертывать конвейеризированное веб-приложение в Kubernetes, автоматизировать сборку и публикацию его образа, а также контролировать состояние приложения и компонентов кластера с помощью системы мониторинга. В результате получено практическое решение, объединяющее облачную инфраструктуру, автоматизацию развертывания, контейнеризацию, оркестрацию и мониторинг в единую систему.
 
