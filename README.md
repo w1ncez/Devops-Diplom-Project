@@ -1400,7 +1400,7 @@ monitoring           prometheus-monitoring-kube-prometheus-prometheus-0       2/
 > Рестарты связаны с выключением ВМ в консоли на время простоя
 
 Страничка нашего приложения:
-![website](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image26..jpg)
+![website](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image26_..jpg)
 
 
 На данном этапе выполнены:
