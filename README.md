@@ -13,9 +13,8 @@
 ## Этапы выполнения:
 - [1. Подготовка облачной инфраструктуры Yandex Cloud с помощью Terraform](#1-подготовка-облачной-инфраструктуры-yandex-cloud-с-помощью-terraform)
 - [2. Запуск и конфигурация Kubernetes кластера](#2-запуск-и-конфигурация-kubernetes-кластера)
-- [3. Создание тестового приложения и настройка CI/CD](#3-создание-тестового-приложения)
-- [4. Развёртывание приложения в Kubernetes](#4-развёртывание-приложения-в-kubernetes)
-- [5. Настройка мониторинга](#5-настройка-мониторинга)
+- [3. Создание тестового приложения и настройка CI/CD](#3-создание-тестового-приложения-и-настройка-cicd)
+- [4. Настройка мониторинга](#4-настройка-мониторинга)
 
 ---
 ### Архитектура решения и используемые технологии
@@ -149,11 +148,11 @@ yandex_storage_bucket.terraform_state
 ```
 В консоли сможем увидеть созданный SA-аккаунт и Бакет в OBS
 ![Созданный SA аккаунт](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image1.jpg)
-![Созданный бакет в Obkect Storage](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image.png)
+![Созданный бакет в Object Storage](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image.png)
 
 #### Настраиваем удалённый Terraform State
 Теперь перенесём State основного проекта из локального файла в созданный бакет. Это позволит хранить состояние инфраструктуры централизованно.
-Находясь в директории bootstratp выполним
+Находясь в директории bootstrap выполним
 ```bash
 export AWS_ACCESS_KEY_ID="$(terraform output -raw access_key)"
 export AWS_SECRET_ACCESS_KEY="$(terraform output -raw secret_key)"
@@ -253,7 +252,7 @@ TCP 30000-32767|	NodePort|	При необходимости
 vCPU|	2|	2
 RAM	|4 ГБ|	4 ГБ
 Диск	|30 ГБ|	20 ГБ
-ОС	|Ubuntu 22.04 LTS|	Ubuntu 22.04 LTS
+ОС	|Ubuntu 24.04.5 LTS|	Ubuntu 24.04.5 LTS
 Публичный IP|	Да|	Да
 
 
@@ -445,7 +444,7 @@ ansible -i inventory/hosts.ini kubernetes -m shell -a \
   ping -c 3 -W 2 "$ip"
 done'
 ```
-Проверимм синхронихацию времени
+Проверимм синхронизацию времени
 ```bash
 ansible -i inventory/hosts.ini kubernetes -m shell -a \
 'timedatectl status'
@@ -611,7 +610,7 @@ Calico обеспечивает:
 > Мы указали Pod CIDR 192.168.0.0/16 при инициализации кластера, Calico должен использовать именно эту сеть.
 
 
-Загружаем манифест [Calico]()
+Загружаем манифест **Calico**
 ```bash
 mkdir -p kubernetes/manifests
 
@@ -736,7 +735,7 @@ ansible/
 ```
 
 
-## 3. Создание тестового приложения
+## 3. Создание тестового приложения и настройка CI/CD
 
 Создадим GitHub репозиторий приложения:
 [nginx-static-app](https://github.com/w1ncez/nginx-static-app)
@@ -835,7 +834,7 @@ server {
 Подготовим **Dockerfile**:
 
 ```dockerfile
-FROM nginx:stable-alpine
+FROM nginx:1.28.0-alpine
 
 LABEL maintainer="DevOps Diplom Project"
 
@@ -847,6 +846,7 @@ EXPOSE 80
 
 CMD ["nginx", "-g", "daemon off;"]
 ```
+> В доработанной версии мы используем конкретную версию базового образа nginx:1.28.0-alpine вместо плавающего тега nginx:stable-alpine.
 
 Находясь в репозитории, запустим сборку образа:
 
@@ -860,7 +860,7 @@ Successfully tagged nginx-static-app:1.0
 ```bash
 sudo docker images                                                                             
 IMAGE                                    ID             DISK USAGE   CONTENT SIZE   EXTRA   
-nginx-static-app:1.0                     f13c6f4cb7b7       92.7MB         26.1MB        
+nginx:1.28.0-alpine                     30f1c0d78e0a       73.7MB           21MB        
 ```
 И запустим контейнер:
 ```bash
@@ -873,19 +873,19 @@ sudo docker run -d \
 ```bash
 sudo docker ps
 CONTAINER ID   IMAGE                  COMMAND                  CREATED         STATUS         PORTS                                     NAMES
-d23b2058bcca   nginx-static-app:1.0   "/docker-entrypoint.…"   4 seconds ago   Up 4 seconds   0.0.0.0:8080->80/tcp, [::]:8080->80/tcp   nginx-static-app
+4c5de0191755   nginx-static-app:1.0   "/docker-entrypoint.…"   6 seconds ago   Up 5 seconds   0.0.0.0:8080->80/tcp, [::]:8080->80/tcp   nginx-static-app
 ```
 И проверим работу nginx:
 ```bash
 curl -I http://localhost:8080
 HTTP/1.1 200 OK
-Server: nginx/1.30.7
-Date: Mon, 23 Nov 2026 18:35:42 GMT
+Server: nginx/1.28.0
+Date: Sat, 28 Nov 2026 15:41:13 GMT
 Content-Type: text/html
-Content-Length: 1386
-Last-Modified: Sun, 22 Nov 2026 09:55:04 GMT
+Content-Length: 1379
+Last-Modified: Fri, 27 Nov 2026 13:48:53 GMT
 Connection: keep-alive
-ETag: "6b02bbf8-56a"
+ETag: "6b098a45-563"
 Accept-Ranges: bytes
 ```
 На данном этапе:
@@ -895,102 +895,7 @@ Accept-Ranges: bytes
 4. Подготовлен Dockerfile.
 5. Приложение запущено и доступно.
 
-### Настройка workflow в GitHub Actions
-
-Создадим в репозитории .github/workflows/docker-build.yml со следующим содержимым:
-```yaml
-name: Build and publish Docker image
-
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  packages: write
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: w1ncez/nginx-static-app
-
-jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build Docker image for testing
-        run: docker build -t nginx-static-app:test .
-
-      - name: Validate Nginx configuration
-        run: docker run --rm nginx-static-app:test nginx -t
-
-      - name: Test application health endpoint
-        run: |
-          docker run -d --name nginx-test -p 8080:80 nginx-static-app:test
-          trap 'docker rm -f nginx-test >/dev/null 2>&1 || true' EXIT
-          for i in {1..10}; do
-            if curl --fail http://localhost:8080/health; then
-              exit 0
-            fi
-            sleep 2
-          done
-          exit 1
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/w1ncez/nginx-static-app
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-```
-
-В нем описаны следующие действия:
-1. Checkout repository получает исходный код из GitHub.
-2. Build Docker image for testing собирает образ.
-3. Validate Nginx configuration проверяет конфигурацию Nginx командой nginx -t.
-4. Test application health endpoint запускает контейнер и проверяет /health.
-5. Log in to GitHub Container Registry выполняет авторизацию через встроенный GITHUB_TOKEN.
-6. Build and push Docker image публикует образ в GHCR.
-
-После коммита и пуша, проверим вкладку Actions и успешность созданного Workflow
-![workflow sucess](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image19.jpg)
-И успешно созданный образ в GitHub Container Registry
-![ghcp success](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image20.jpg)
-
-На данном этапе реализована следующая цепочка:
-1. Мы отправляем изменения в GitHub.
-2. GitHub Actions автоматически запускает workflow.
-3. Проверяется конфигурация Nginx.
-4. Собирается Docker-образ.
-5. Проверяется HTTP-эндпоинт /health.
-6. Образ публикуется в GitHub Container Registry (GHCR).
-
-## 4. Развёртывание приложения в Kubernetes
+## Развёртывание приложения в Kubernetes
 
 Далее необходимо запустить наше Nginx-приложение в ранее созданном трёхузловом Kubernetes-кластере, используя образ из GHCR.
 
@@ -1003,7 +908,7 @@ Deployment	|nginx-static-app
 Container port	|80
 Service	|NodePort
 Health checks	|Readiness и Liveness probes
-Image	|ghcr.io/w1ncez/nginx-static-app:latest
+Image	|ghcr.io/w1ncez/nginx-static-app:1.28.0
 
 Начнем с создания манифестов [namespace.yaml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/kubernetes/manifests/app/namespace.yaml), [deployment.yaml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/kubernetes/manifests/app/deployment.yaml) и [service.yaml](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/kubernetes/manifests/app/service.yaml)
 
@@ -1012,7 +917,7 @@ Image	|ghcr.io/w1ncez/nginx-static-app:latest
 - запуск приложения;
 - сетевой доступ к Pod.
 
-Далее приступим к прмиенению:
+Далее приступим к применению:
 ```bash
 ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
 'kubectl apply -f -' \
@@ -1042,7 +947,328 @@ ssh -i /home/w1nce/id_ed25519 ubuntu@84.201.173.43 \
 6. Настроено ограничение CPU и памяти.
 7. Произведена проверка корректности работы приложения.
 
-## 5. Настройка мониторинга
+### Настройка workflow в GitHub Actions
+
+В рамках первоначальной настройки workflow зарегистрируем self-hosted runner согласно пошаговому [гайду от GH](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners).
+
+В первоначальной реализации workflow запускался при отправке изменений в ветку `main` и публиковал образ с тегом `latest`. В итоговой реализации workflow запускается при публикации Git-тега, соответствующего шаблону `v*` (например, `v1.0.0`, `v1.0.1`, `v1.0.2`), что позволяет жёстко связать версию релиза с образом в GHCR.
+
+Для выполнения второго задания (`deploy`) используется self-hosted runner, установленный как системная служба на узле `worker-1`. Это позволяет не поднимать отдельную виртуальную машину под runner и выполнять развёртывание из среды с доступом к Kubernetes API Server. При этом команда `kubectl set image` обновляет образ непосредственно в Deployment кластера (без автоматического коммита изменений обратно в `kubernetes/manifests/app/deployment.yaml`).
+
+Примеры версий:
+```text
+v1.0.0
+v1.0.1
+v1.0.2
+```
+Это позволяет связывать конкретную версию исходного кода с соответствующей версией Docker-образа.
+
+Создадим в репозитории .github/workflows/docker-build.yml со следующим содержимым:
+```yaml
+name: Build, Publish and Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image for testing
+        run: docker build -t nginx-static-app:test .
+
+      - name: Validate Nginx configuration
+        run: docker run --rm nginx-static-app:test nginx -t
+
+      - name: Test application health endpoint
+        run: |
+          docker run -d --name nginx-test -p 8080:80 nginx-static-app:test
+          trap 'docker rm -f nginx-test >/dev/null 2>&1 || true' EXIT
+
+          for i in {1..10}; do
+            if curl --fail http://localhost:8080/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          exit 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/w1ncez/nginx-static-app
+          tags: |
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    name: Deploy to Kubernetes
+    needs: build-and-push
+    runs-on: [self-hosted, Linux, X64]
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Configure Kubernetes access
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/kube"
+          printf '%s' "$KUBE_CONFIG_B64" | base64 --decode \
+            > "$RUNNER_TEMP/kube/config"
+
+          chmod 600 "$RUNNER_TEMP/kube/config"
+
+          echo "KUBECONFIG=$RUNNER_TEMP/kube/config" >> "$GITHUB_ENV"
+
+      - name: Verify Kubernetes access
+        run: |
+          set -euo pipefail
+
+          echo "Checking access to application namespace..."
+
+          kubectl get deployment nginx-static-app -n diplom
+
+          test "$(kubectl auth can-i get deployments -n diplom)" = "yes"
+          test "$(kubectl auth can-i patch deployments -n diplom)" = "yes"
+          test "$(kubectl auth can-i delete deployments -n diplom)" = "no"
+          test "$(kubectl auth can-i get secrets -n diplom)" = "no"
+
+          echo "Kubernetes RBAC checks passed"
+
+      - name: Update Kubernetes Deployment
+        env:
+          IMAGE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          IMAGE="ghcr.io/w1ncez/nginx-static-app:${IMAGE_TAG}"
+
+          echo "Deploying image: ${IMAGE}"
+
+          kubectl set image deployment/nginx-static-app \
+            nginx="${IMAGE}" \
+            -n diplom
+
+      - name: Verify deployment rollout
+        run: |
+          set -euo pipefail
+
+          kubectl rollout status deployment/nginx-static-app \
+            -n diplom \
+            --timeout=180s
+
+          kubectl get deployment nginx-static-app -n diplom -o wide
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/kube"
+```
+Рассмотрим измененную версию:
+
+#### Первое задание **Build and Push Docker Image**
+Выполняется на стандартном GitHub-hosted runner с операционной системой Ubuntu.
+
+Последовательность действий:
+1. Checkout repository получает исходный код проекта из GitHub.
+2. Build Docker image for testing собирает локальный Docker-образ для последующего тестирования.
+3. Validate Nginx configuration проверяет корректность конфигурации Nginx командой nginx -t.
+4. Test application health endpoint запускает временный контейнер и проверяет доступность /health. При неудачной проверке сборка завершается с ошибкой.
+5. Set up Docker Buildx подготавливает инструмент сборки Docker-образов.
+6. Log in to GHCR выполняет авторизацию в GitHub Container Registry с использованием встроенного GITHUB_TOKEN.
+7. Extract Docker metadata формирует теги для Docker-образа на основании Git-тега и короткого SHA коммита.
+8. Build and push Docker image собирает итоговый образ и публикует его в GHCR.
+
+Например, при создании Git-тега v1.0.2 публикуется образ:
+```text
+ghcr.io/w1ncez/nginx-static-app:v1.0.2
+```
+Дополнительно создаётся тег с коротким SHA коммита, что позволяет идентифицировать исходный код, использованный для сборки.
+
+#### Второе задание **Deploy to Kubernetes**
+
+Второе задание запускается только после успешного выполнения build-and-push. Это обеспечивается параметром:
+```yaml
+needs: build-and-push
+```
+Для выполнения развёртывания используется self-hosted GitHub Actions runner, установленный на существующем узле worker-1 Kubernetes-кластера.
+Такой подход позволяет не создавать дополнительную виртуальную машину и выполнять операции развёртывания из среды, имеющей сетевой доступ к Kubernetes API Server.
+
+Последовательность действий:
+1. Configure Kubernetes access декодирует kubeconfig, полученный из GitHub Repository Secret KUBE_CONFIG_B64, и устанавливает переменную окружения KUBECONFIG.
+2. Verify Kubernetes access проверяет доступ к Deployment в namespace diplom и проверяет разрешения ServiceAccount.
+3. Update Kubernetes Deployment формирует имя Docker-образа на основании Git-тега и обновляет контейнер nginx в Deployment.
+4. Verify deployment rollout ожидает завершения обновления и проверяет состояние Deployment.
+5. Cleanup kubeconfig удаляет временный файл конфигурации Kubernetes после выполнения задания.
+
+Для обновления приложения используется команда:
+```bash
+kubectl set image deployment/nginx-static-app \
+  nginx="ghcr.io/w1ncez/nginx-static-app:${IMAGE_TAG}" \
+  -n diplom
+```
+Таким образом, Kubernetes получает новую версию образа без необходимости вручную изменять манифест Deployment.
+
+#### Настройка доступа GitHub Actions к Kubernetes
+
+Для автоматизированного развёртывания необходимо предоставить GitHub Actions доступ к Kubernetes API.
+Вместо использования административной учётной записи кластера создадим отдельную ServiceAccount в **github-actions-rbac.yaml**
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: github-actions-deployer
+  namespace: diplom
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: github-actions-deployer
+  namespace: diplom
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: github-actions-deployer
+  namespace: diplom
+subjects:
+  - kind: ServiceAccount
+    name: github-actions-deployer
+    namespace: diplom
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: github-actions-deployer
+```
+Здесь используются три объекта Kubernetes:
+- ServiceAccount представляет отдельную учётную запись для автоматизированного процесса.
+- Role определяет разрешённые операции с ресурсами внутри namespace diplom.
+- RoleBinding связывает ServiceAccount с созданной ролью.
+
+Роль предоставляет права на чтение и обновление Deployment, а также чтение ReplicaSet и Pod.
+При этом учётная запись не может удалять Deployment или читать Secrets. Это позволяет ограничить полномочия CI/CD необходимым минимумом.
+
+Для аутентификации был создан ServiceAccount token, а kubeconfig подготовлен с использованием адреса Kubernetes API Server, CA-сертификата и токена.
+Полученный kubeconfig был сохранён в GitHub Repository Secrets под именем:
+**KUBE_CONFIG_B64**
+Значение секрета используется непосредственно в workflow и не хранится в открытом виде в репозитории.
+Дополнительно self-hosted runner зарегистрирован в репозитории w1ncez/nginx-static-app и работает как системная служба на узле worker-1.
+
+#### Проверка автоматизированного CI/CD и развёртывания
+
+После настройки workflow и доступа к Kubernetes выполним публикацию новой версии приложения.
+
+Создадим аннотированный Git-тег
+```bash
+git tag -a v1.0.2 -m "Release version 1.0.2"
+```
+Отправим тег в GitHub:
+```bash
+git push origin v1.0.2
+```
+После публикации тега GitHub Actions автоматически запускает workflow Build, Publish and Deploy.
+
+В ходе выполнения проверяются:
+- Сборка Docker-образа.
+- Корректность конфигурации Nginx.
+- Доступность HTTP-эндпоинта /health.
+- Авторизация в GitHub Container Registry.
+- Публикация Docker-образа с версионным тегом.
+- Подключение к Kubernetes.
+- Проверка RBAC-разрешений.
+- Обновление Deployment.
+- Успешность rollout.
+
+Результат публикации образа:
+```text
+ghcr.io/w1ncez/nginx-static-app:v1.0.2
+```
+Результат проверки Kubernetes:
+```bash
+deployment "nginx-static-app" successfully rolled out
+```
+Состояние Deployment:
+```bash
+NAME               READY   UP-TO-DATE   AVAILABLE   IMAGES
+nginx-static-app   3/3     3            3           ghcr.io/w1ncez/nginx-static-app:v1.0.2
+```
+Проверка Pod показала, что все три экземпляра приложения находятся в состоянии Running, а количество перезапусков равно нулю:
+```bash
+NAME                               READY   STATUS    RESTARTS
+nginx-static-app-565df5dfc-brhjm   1/1     Running   0
+nginx-static-app-565df5dfc-khzt4   1/1     Running   0
+nginx-static-app-565df5dfc-sxgvv   1/1     Running   0
+```
+Реплики размещены на двух рабочих узлах Kubernetes-кластера: worker-1 и worker-2.
+Таким образом, подтверждена работа автоматизированного процесса от создания Git-тега до обновления приложения в Kubernetes.
+
+В результате выполнения данного этапа:
+- Создан отдельный GitHub-репозиторий для статического веб-приложения.
+- Подготовлена главная HTML-страница.
+- Настроен Nginx и реализован HTTP health endpoint /health.
+- Создан Dockerfile с фиксированной версией базового образа.
+- Проверена локальная сборка и работа Docker-контейнера.
+- Подготовлены Kubernetes-манифесты для развёртывания приложения.
+- Приложение развёрнуто в Kubernetes в трёх экземплярах.
+- Настроен Service типа NodePort для доступа к приложению.
+- Настроен GitHub Actions для автоматической сборки и тестирования Docker-образа.
+- Реализована публикация версионных Docker-образов в GitHub Container Registry.
+- Установлен self-hosted GitHub Actions runner на существующем Kubernetes worker-узле.
+- Созданы ServiceAccount, Role и RoleBinding для ограниченного доступа к Kubernetes.
+- Реализовано автоматическое обновление Kubernetes Deployment после публикации Git-тега.
+- Проверено успешное развёртывание версии v1.0.2: три из трёх реплик находятся в состоянии Ready.
+
+
+## 4. Настройка мониторинга
 
 Для реализации задачи мониторинга мы будем использовать стек **kube-prometheus-stack**, который позволит развернуть основные компоненты мониторинга в нашем кластере Kubernetes.
 
@@ -1366,7 +1592,7 @@ ssh -i "C:\Temp\id_ed25519" -L  3000:localhost:3000 ubuntu@84.201.173.43
 ![grafana2](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image24.jpg)
 ![grafana3](https://github.com/w1ncez/Devops-Diplom-Project/blob/main/img/image25..jpg)
 
-В конце проверим все наши поды во всех неймспейсах и отображение странички нашего прилоожения:
+В конце проверим все наши поды во всех неймспейсах и отображение странички нашего приложения:
 ```
 ubuntu@master-1:~$ kubectl get pods --all-namespaces
 NAMESPACE            NAME                                                     READY   STATUS    RESTARTS      AGE
@@ -1412,10 +1638,7 @@ monitoring           prometheus-monitoring-kube-prometheus-prometheus-0       2/
 - Проверена корректность передачи метрик и визуализация.
 - Проверена работа кластера Kubernetes и нашего приложения.
 
-
 ---
-
-
 
 В рамках дипломного проекта реализована инфраструктура для развертывания и эксплуатации веб-приложения на базе Yandex Cloud и Kubernetes с использованием инструментов автоматизации DevOps.
 
@@ -1423,10 +1646,9 @@ monitoring           prometheus-monitoring-kube-prometheus-prometheus-0       2/
 - Создана облачная инфраструктура в Yandex Cloud, включающая виртуальную сеть, подсети, группы безопасности и три виртуальные машины в разных зонах доступности.
 - Подготовлены серверы и автоматизирована установка Kubernetes-кластера с использованием kubeadm, containerd и Calico.
 - Создан Docker-образ статического веб-приложения на базе Nginx и опубликован в GitHub Container Registry (GHCR).
-- Настроен автоматический процесс сборки, проверки и публикации Docker-образа при изменении исходного кода приложения.
+- Настроен автоматический процесс сборки, проверки и публикации Docker-образа при публикации нового Git-тега версии (v*).
 - Развернуто веб-приложение с тремя репликами, настроены Service типа NodePort и проверки работоспособности приложения.
 - Установлен комплекс kube-prometheus-stack, включающий Prometheus, Grafana, Alertmanager, Node Exporter и kube-state-metrics. Настроено постоянное хранение данных мониторинга и ограничение потребления ресурсов.
 
 Результат:
 Создана работоспособная инфраструктура, позволяющая развертывать конвейеризированное веб-приложение в Kubernetes, автоматизировать сборку и публикацию его образа, а также контролировать состояние приложения и компонентов кластера с помощью системы мониторинга. В результате получено практическое решение, объединяющее облачную инфраструктуру, автоматизацию развертывания, контейнеризацию, оркестрацию и мониторинг в единую систему.
-
