@@ -7,16 +7,13 @@ metadata:
     app: nginx-static-app
 spec:
   replicas: 3
-
   selector:
     matchLabels:
       app: nginx-static-app
-
   template:
     metadata:
       labels:
         app: nginx-static-app
-
     spec:
       terminationGracePeriodSeconds: 10
       affinity:
@@ -26,7 +23,6 @@ spec:
               - matchExpressions:
                   - key: node-role.kubernetes.io/control-plane
                     operator: DoesNotExist
-
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -34,17 +30,14 @@ spec:
           labelSelector:
             matchLabels:
               app: nginx-static-app
-
       containers:
         - name: nginx
-          image: ghcr.io/w1ncez/nginx-static-app:latest
+          image: ghcr.io/w1ncez/nginx-static-app:v1.0.2
           imagePullPolicy: Always
-
           ports:
             - name: http
               containerPort: 80
               protocol: TCP
-
           resources:
             requests:
               cpu: 50m
@@ -52,7 +45,6 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-
           readinessProbe:
             httpGet:
               path: /health
@@ -61,7 +53,6 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
-
           livenessProbe:
             httpGet:
               path: /health
